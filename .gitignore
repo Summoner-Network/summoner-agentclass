@@ -1,5 +1,8 @@
 core/
 .DS_Store
+logs/
+todo.py
+validation_draft.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

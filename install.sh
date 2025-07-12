@@ -48,8 +48,6 @@ bootstrap() {
 
   # Create the .env file
   cat <<EOF > "$SRC/.env"
-LOG_LEVEL=INFO
-ENABLE_CONSOLE_LOG=true
 DATABASE_URL=postgres://user:pass@localhost:5432/mydb
 SECRET_KEY=supersecret
 EOF
@@ -84,14 +82,15 @@ case "$1" in
 
   delete)
     echo "🔄 Deleting environment..."
-    rm -rf "$SRC" "$VENVDIR" "$ROOT"/test_*.{log,py,json}
+    rm -rf "$SRC" "$VENVDIR" "$ROOT"/logs
+    rm -f "$ROOT"/test_*.{py,json}
     echo "✅ Deletion complete"
     # exit 0
     ;;
 
   reset)
     echo "🔄 Resetting environment..."
-    rm -rf "$SRC" "$VENVDIR"
+    rm -rf "$SRC" "$VENVDIR" "$ROOT"/logs
     bootstrap
     echo "✅ Reset complete"
     # exit 0
@@ -138,7 +137,8 @@ EOF
 
   clean)
     echo "🧹 Cleaning test scripts..."
-    rm -f "$ROOT"/test_*.{log,py,json}
+    rm -rf "$ROOT"/logs/*
+    rm -f "$ROOT"/test_*.{py,json}
     echo "✅ Clean complete"
     # exit 0
     ;;
