@@ -14,7 +14,7 @@ from summoner.client import SummonerClient
 class KoboldAgent(SummonerClient):
     
     release_name = "kobold"
-    release_version = "1.0.0"
+    release_version = "0.0.1"
 
     # identities:
         # identity = agent.identity()
