@@ -11,9 +11,9 @@ if target_path not in sys.path:
 
 from summoner.client import SummonerClient
 
-class KoboldAgent(SummonerClient):
+class SummonerAgent(SummonerClient):
     
-    release_name = "kobold"
+    release_name = "aurora"
     release_version = "0.0.1"
 
     # identities:
@@ -22,7 +22,7 @@ class KoboldAgent(SummonerClient):
         # use SummonerClient.initialize() to set up ID (variables, etc)
 
     # hooks:
-    # - added kobold version
+    # - added aurora version
     # - validation could have reputation
     
     
