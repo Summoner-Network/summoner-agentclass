@@ -5,13 +5,13 @@ target_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__fil
 if target_path not in sys.path:
     sys.path.insert(0, target_path)
 
-from tooling.aurora import SummonerAgent
+from tooling.aurora import SummonerAgent as AuroraAgent
 
 
-def test_kobold_agent():
+def test_aurora_agent():
     success = True
     try:
-        agent = SummonerAgent()
+        agent = AuroraAgent()
     except:
         success = False
     assert success
