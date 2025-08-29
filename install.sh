@@ -54,7 +54,7 @@ EOF
 
   # Reinstall Python & Rust SDK via backend scripts
   echo "🔁 Reinstalling Python & Rust SDK..."
-  bash "$SRC/reinstall_python_sdk.sh" rust_server_sdk
+  bash "$SRC/reinstall_python_sdk.sh" rust_server_v1_0_0
 }
 
 # ─────────────────────────────────────────────────────
@@ -103,7 +103,7 @@ case "$1" in
     else
       . "$VENVDIR/bin/activate"
     fi
-    bash "$SRC/reinstall_python_sdk.sh" rust_server_sdk
+    bash "$SRC/reinstall_python_sdk.sh" rust_server_v1_0_0
     echo "✅ Dependencies reinstalled"
     # exit 0
     ;;
