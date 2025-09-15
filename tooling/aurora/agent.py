@@ -113,12 +113,32 @@ class SummonerAgent(SummonerClient):
             async def on_player_event(payload): ...
         """
         route = route.strip()
+
+        # --- Build extractors once (no duplication) ---
+        if key_by is None:
+            raise ValueError("@keyed_receive requires key_by")
+
+        if isinstance(key_by, str):
+            def _key(payload): 
+                return payload[key_by] if isinstance(payload, dict) else getattr(payload, key_by)
+        else:
+            _key = key_by
+
+        if seq_by is None:
+            def _seq(_): return None
+        elif isinstance(seq_by, str):
+            def _seq(payload): 
+                return payload[seq_by] if isinstance(payload, dict) else getattr(payload, seq_by)
+        else:
+            _seq = seq_by
+
         def decorator(fn):
             if not inspect.iscoroutinefunction(fn):
                 raise TypeError(f"@keyed_receive handler '{fn.__name__}' must be async")
+
             tuple_priority = (priority,) if isinstance(priority, int) else tuple(priority)
 
-            # DNA capture consistent with base class
+            # DNA capture (same shape as base class)
             self._dna_receivers.append({
                 "fn": fn,
                 "route": route,
@@ -128,30 +148,22 @@ class SummonerAgent(SummonerClient):
                 "fn_name": fn.__name__,
             })
 
-            # Build extractors
-            if isinstance(key_by, str):
-                def _key(payload): return payload[key_by] if isinstance(payload, dict) else getattr(payload, key_by)
-            else:
-                _key = key_by
-
-            if seq_by is None:
-                def _seq(_): return None
-            elif isinstance(seq_by, str):
-                def _seq(payload): return payload[seq_by] if isinstance(payload, dict) else getattr(payload, seq_by)
-            else:
-                _seq = seq_by
-
             async def register():
+                # lazy init
+                if self._key_mutex is None:
+                    self._key_mutex = AsyncKeyedMutex()
+
                 raw_fn = fn
+                key_fn = _key         # freeze closures
+                seq_fn = _seq
 
                 async def wrapped(payload):
-                    k = _key(payload)
-                    async with self._key_mutex.lock((route, k)):   # lock per (route,key)
-                        s = _seq(payload)
+                    k = key_fn(payload)
+                    async with self._key_mutex.lock((route, k)):
+                        s = seq_fn(payload)
                         if s is not None:
                             last = self._seq_seen.get((route, k))
-                            # Drop duplicates or stale replays
-                            if last is not None and s <= last:
+                            if last is not None and s <= last:   # drop stale/replay
                                 return None
                             self._seq_seen[(route, k)] = s
                         return await raw_fn(payload)
