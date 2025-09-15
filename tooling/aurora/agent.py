@@ -18,7 +18,7 @@ from typing import Callable, Union, Hashable, Any, Optional
 class SummonerAgent(SummonerClient):
     
     release_name = "aurora"
-    release_version = "0.0.1"
+    release_version = "beta.1.1.0"
 
     def __init__(self, name: Optional[str] = None):
         super().__init__(name)         
