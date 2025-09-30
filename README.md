@@ -23,7 +23,7 @@ This will create your own copy of the repo that you can clone and start working 
 First, clone the template repository and navigate into it:
 
 ```bash
-git clone https://github.com/Summoner-Network/your_repo_name.git
+git clone https://github.com/Summoner-Network/summoner-agentclass
 cd your_repo_name
 ````
 
