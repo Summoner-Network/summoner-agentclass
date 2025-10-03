@@ -1,27 +1,31 @@
-# install_on_windows.ps1 — PowerShell-only manager (uses core\.venv exclusively)
+# install_on_windows.ps1 — PowerShell-only manager (uses venv exclusively)
 # ==============================================================================
 # How to use this script
 # ==============================================================================
 # > First, you may need to use the following command to allow the script to run:
-# Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+#   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 #
 # > Then, you can run the script as follows:
-# .\install_on_windows.ps1 setup
-# .\install_on_windows.ps1 test_server_bg                # start in background
-# .\install_on_windows.ps1 status                        # see PID + port status
-# .\install_on_windows.ps1 stop_server                   # stop cleanly
+#   .\install_on_windows.ps1 setup
+#   .\install_on_windows.ps1 test_server                # run server in foreground
+#   . .\install_on_windows.ps1 use_venv                  # dot-source to activate the repo venv in THIS session (recommended for full activation)
+#
+# > Notes:
+# - Running the script normally (.\install_on_windows.ps1 setup) will set the environment variables so python/pip resolve to the repo venv.
+# - If you also want prompt/function changes from Activate.ps1 to persist in your interactive shell, dot-source:
+#     . .\install_on_windows.ps1 use_venv
 #
 # > or foreground run (Ctrl+C may not work reliably on Windows):
-# .\install_on_windows.ps1 test_server
+#   .\install_on_windows.ps1 test_server
 #
 # > choose port or force-terminate listeners:
-# .\install_on_windows.ps1 test_server_bg -Port 8890
-# .\install_on_windows.ps1 stop_server -Port 8890
+#   .\install_on_windows.ps1 test_server -Port 8890
+#   .\install_on_windows.ps1 test_server -Port 8890 -Force
 # ==============================================================================
 [CmdletBinding()]
 param(
   [Parameter(Position=0)]
-  [ValidateSet('setup','delete','reset','deps','test_server','test_server_bg','stop_server','status','clean','use_core_venv')]
+  [ValidateSet('setup','delete','reset','deps','test_server','clean','use_venv')]
   [string]$Action = 'setup',
 
   # Options for server actions
@@ -50,7 +54,7 @@ function Get-PythonSpec {
 
 function Resolve-VenvPaths([string]$VenvDir) {
   $exe = Join-Path $VenvDir 'Scripts\python.exe'
-  $nix = Join-Path $VenvDir 'bin\python'
+  $nix = Join-Path (Join-Path $VenvDir 'bin') 'python'
   if (Test-Path $exe) { return @{ Py=$exe; Bin=(Join-Path $VenvDir 'Scripts') } }
   if (Test-Path $nix) { return @{ Py=$nix; Bin=(Join-Path $VenvDir 'bin') } }
   return @{ Py=$null; Bin=$null }
@@ -62,12 +66,12 @@ function Ensure-Git {
   }
 }
 
-# ---------- Paths (Option A layout) ----------
-$ROOT     = Split-Path -Parent $MyInvocation.MyCommand.Path
+# ---------- Paths ----------
+$ScriptFile = $MyInvocation.MyCommand.Definition
+$ROOT = (Resolve-Path (Split-Path -Parent $ScriptFile)).ProviderPath
 $SRC      = Join-Path $ROOT 'core'        # summoner-core repository path
-$VENVDIR  = Join-Path $SRC  '.venv'       # venv lives inside repo
+$VENVDIR  = Join-Path $ROOT 'venv'       # venv lives inside the root repo
 $DATA     = Join-Path $SRC  'desktop_data'
-$PIDFILE  = Join-Path $ROOT '.server.pid' # background server PID
 
 function Write-EnvFile {
   $envPath = Join-Path $SRC '.env'
@@ -95,8 +99,46 @@ function Is-ProcessRunning([int]$pid) {
   try { Get-Process -Id $pid -ErrorAction Stop | Out-Null; return $true } catch { return $false }
 }
 
+# Activate the repo venv in the current PowerShell process.
+# Note: environment variables (PATH, VIRTUAL_ENV) set here will persist in the session.
+#       prompt/function modifications inside Activate.ps1 will only persist if the activate script is dot-sourced in the current session.
+function Activate-Venv {
+  param([string]$VenvDir)
+
+  $vp = Resolve-VenvPaths $VenvDir
+  if (-not $vp.Py) { throw ("venv not found at {0}. Run .\install_on_windows.ps1 setup first." -f $VenvDir) }
+
+  # If Activate.ps1 is present, dot-source it here — that tries to set functions and state.
+  # If the manager script itself is not dot-sourced, dot-sourcing inside this function affects the manager script scope,
+  # but environment variable modifications will still persist at the process level.
+  $activatePS = Join-Path $VenvDir 'Scripts\Activate.ps1'
+  if (Test-Path $activatePS) {
+    try {
+      . $activatePS
+    } catch {
+      Write-Warning ("Activation script failed: {0}" -f $_.Exception.Message)
+      # fallback to manual env setup below
+    }
+  }
+
+  # Ensure environment variables and PATH are set so python/pip resolve to venv
+  Remove-Item Function:\python -ErrorAction SilentlyContinue
+  Remove-Item Function:\pip   -ErrorAction SilentlyContinue
+
+  $env:VIRTUAL_ENV = (Resolve-Path $VenvDir).ProviderPath
+  $env:Path = "$($vp.Bin);$env:Path"
+
+  # Verification
+  & $vp.Py -c "import sys, os; print('python executable:', sys.executable); print('sys.prefix:', os.path.abspath(sys.prefix))"
+  Write-Host ("Activated venv at: {0}" -f $VenvDir)
+  Write-Host "If you want prompt/function changes to persist in this interactive shell, run:"
+  Write-Host "  . .\install_on_windows.ps1 use_venv"
+  Write-Host "or dot-source the venv's activate directly:"
+  Write-Host "  . $VENVDIR\Scripts\Activate.ps1"
+}
+
 function Bootstrap {
-  Write-Host "Bootstrapping environment (core\.venv)..."
+  Write-Host ("Bootstrapping environment at: {0}" -f $VENVDIR)
 
   Ensure-Git
   $pySpec = Get-PythonSpec
@@ -121,8 +163,8 @@ function Bootstrap {
   Write-Host "Upgrading pip and build tools..."
   & $vp.Py -m pip install --upgrade pip setuptools wheel maturin
 
-  Write-Host "Installing summoner-core (editable) into core\.venv..."
-  & $vp.Py -m pip install -e $SRC
+  Write-Host ("Installing summoner-core (non-editable) into: {0}" -f $VENVDIR)
+  & $vp.Py -m pip install $SRC
 
   Write-Host "Writing .env..."
   Write-EnvFile
@@ -150,8 +192,11 @@ if __name__ == "__main__":
 }
 
 function Usage {
-  Write-Host "Usage: .\install_on_windows.ps1 {setup|delete|reset|deps|test_server|test_server_bg|stop_server|status|clean|use_core_venv} [-Port 8888] [-Force]"
+  Write-Host "Usage: .\install_on_windows.ps1 {setup|delete|reset|deps|test_server|clean|use_venv} [-Port 8888] [-Force]"
 }
+
+# Detect if script was dot-sourced into current session (used only for messaging).
+$IsDotSourced = ($MyInvocation.InvocationName -eq '.')
 
 switch ($Action) {
   'setup' {
@@ -163,23 +208,48 @@ switch ($Action) {
       if (-not $vp.Py) { throw ("venv missing or broken: {0}" -f $VENVDIR) }
       & $vp.Py -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('summoner') else 1)"
       if ($LASTEXITCODE -ne 0) {
-        Write-Host "Installing summoner-core (editable) into existing venv..."
-        & $vp.Py -m pip install -e $SRC
+        Write-Host ("Installing summoner-core (non-editable) into: {0}" -f $VENVDIR)
+        & $vp.Py -m pip install $SRC
       }
     }
     Write-Host ("Environment ready at {0}" -f $ROOT)
+
+    # Activate venv in this session (sets PATH and VIRTUAL_ENV). These env changes will persist.
+    try {
+      Activate-Venv -VenvDir $VENVDIR
+    } catch {
+      Write-Warning ("Failed to auto-activate venv in this process: {0}" -f $_.Exception.Message)
+      Write-Host "You can activate manually with: . $VENVDIR\Scripts\Activate.ps1  (dot-source into current shell)"
+    }
+
+    if ($IsDotSourced) {
+      Write-Host "Note: you ran this script via dot-sourcing; activation (including functions/prompt) persists in your current shell."
+    } else {
+      Write-Host "Note: if you want prompt/function changes to persist, dot-source the activation now:"
+      Write-Host "  . .\install_on_windows.ps1 use_venv"
+    }
+
     Write-Host ""
-    Write-Host "Use background start + stop for reliable control on Windows:"
-    Write-Host "  .\install_on_windows.ps1 test_server_bg   # start"
-    Write-Host "  .\install_on_windows.ps1 stop_server      # stop"
+    Write-Host "To run the test server in foreground (Ctrl+C to stop):"
+    Write-Host "  .\install_on_windows.ps1 test_server -Port 8888"
+  }
+
+  'delete' {
+    Write-Host "Deleting environment..."
+    if (Test-Path $SRC)         { Remove-Item $SRC -Recurse -Force }
+    if (Test-Path $VENVDIR)     { Remove-Item $VENVDIR -Recurse -Force }
+    if (Test-Path "$ROOT\logs") { Remove-Item "$ROOT\logs" -Recurse -Force }
+    Get-ChildItem $ROOT -Filter 'test_*.py'   -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $ROOT -Filter 'test_*.json' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Write-Host "Deletion complete."
   }
 
   'deps' {
     if (-not (Test-Path $VENVDIR)) { Bootstrap }
     $vp = Resolve-VenvPaths $VENVDIR
     if (-not $vp.Py) { throw ("venv missing: {0}" -f $VENVDIR) }
-    Write-Host "Reinstalling summoner-core (editable)..."
-    & $vp.Py -m pip install -e $SRC
+    Write-Host "Reinstalling summoner-core (non-editable)..."
+    & $vp.Py -m pip install $SRC
     Write-Host "Dependencies reinstalled."
   }
 
@@ -205,74 +275,31 @@ switch ($Action) {
     & $vp.Py $script:TestPy --config $script:TestCfg
   }
 
-  'test_server_bg' {
-    if (-not (Test-Path $VENVDIR)) { Bootstrap }
-    $vp = Resolve-VenvPaths $VENVDIR
-    if (-not $vp.Py) { throw ("venv missing: {0}" -f $VENVDIR) }
+  'reset' {
+    Write-Host "Resetting environment..."
+    if (Test-Path $SRC)         { Remove-Item $SRC -Recurse -Force }
+    if (Test-Path "$ROOT\logs") { Remove-Item "$ROOT\logs" -Recurse -Force }
+    if (Test-Path $VENVDIR)     { Remove-Item $VENVDIR -Recurse -Force }
+    Get-ChildItem $ROOT -Filter 'test_*.py'   -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $ROOT -Filter 'test_*.json' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Bootstrap
 
-    Ensure-TestArtifacts -p $Port
-
-    # Stop an existing background server on the same port
-    if (Test-Path $PIDFILE) {
-      $oldPid = 0 + (Get-Content $PIDFILE)
-      if (Is-ProcessRunning $oldPid) {
-        Write-Host ("Found existing background server PID {0}. Stopping it..." -f $oldPid)
-        try { Stop-Process -Id $oldPid -Force -ErrorAction Stop } catch {}
-      }
-      Remove-Item $PIDFILE -Force -ErrorAction SilentlyContinue
+    # Activate the freshly created venv in this session (sets PATH/VIRTUAL_ENV)
+    try {
+      Activate-Venv -VenvDir $VENVDIR
+    } catch {
+      Write-Warning ("Failed to auto-activate venv after reset in this process: {0}" -f $_.Exception.Message)
+      Write-Host "You can activate manually with: . $VENVDIR\Scripts\Activate.ps1  (dot-source into current shell)"
     }
 
-    # Ensure port is free
-    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    if ($conn) {
-      Write-Host ("Port {0} is in use; terminating listeners before start..." -f $Port)
-      Free-Port -p $Port
-    }
-
-    Write-Host ("Starting test server in background on 127.0.0.1:{0} ..." -f $Port)
-    $args = @($script:TestPy, '--config', $script:TestCfg)
-    $proc = Start-Process -FilePath $vp.Py -ArgumentList $args -WorkingDirectory $ROOT -PassThru -WindowStyle Normal
-    Set-Content -Path $PIDFILE -Value $proc.Id -Encoding ascii
-    Write-Host ("Background PID: {0}. Use '.\install_on_windows.ps1 status' or 'stop_server'." -f $proc.Id)
-  }
-
-  'stop_server' {
-    # Prefer PID file; fall back to killing listeners on the port
-    if (Test-Path $PIDFILE) {
-      $pid = 0 + (Get-Content $PIDFILE)
-      if (Is-ProcessRunning $pid) {
-        Write-Host ("Stopping background server PID {0} ..." -f $pid)
-        try { Stop-Process -Id $pid -Force -ErrorAction Stop } catch {
-          Write-Warning ("Failed to stop PID {0}: {1}" -f $pid, $_.Exception.Message)
-        }
-      } else {
-        Write-Host ("PID {0} from .server.pid is not running." -f $pid)
-      }
-      Remove-Item $PIDFILE -Force -ErrorAction SilentlyContinue
+    if ($IsDotSourced) {
+      Write-Host "Note: you ran this script via dot-sourcing; activation (including functions/prompt) persists in your current shell."
     } else {
-      Write-Host "No PID file found; stopping any process listening on the chosen port..."
-      Free-Port -p $Port
-    }
-    Write-Host "Stop complete."
-  }
-
-  'status' {
-    $runningByPID = $false
-    if (Test-Path $PIDFILE) {
-      $pid = 0 + (Get-Content $PIDFILE)
-      $runningByPID = Is-ProcessRunning $pid
-      Write-Host ("PID file: {0} (running: {1})" -f $pid, $runningByPID)
-    } else {
-      Write-Host "PID file: (none)"
+      Write-Host "Note: if you want prompt/function changes to persist, dot-source the activation now:"
+      Write-Host "  . .\install_on_windows.ps1 use_venv"
     }
 
-    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    if ($conn) {
-      $pids = $conn | Select-Object -ExpandProperty OwningProcess -Unique
-      Write-Host ("Port {0} listeners: {1}" -f $Port, ($pids -join ', '))
-    } else {
-      Write-Host ("Port {0} listeners: none" -f $Port)
-    }
+    Write-Host "Reset complete."
   }
 
   'clean' {
@@ -285,35 +312,8 @@ switch ($Action) {
     Write-Host "Clean complete."
   }
 
-  'reset' {
-    Write-Host "Resetting environment..."
-    if (Test-Path $SRC)         { Remove-Item $SRC -Recurse -Force }
-    if (Test-Path "$ROOT\logs") { Remove-Item "$ROOT\logs" -Recurse -Force }
-    if (Test-Path $PIDFILE)     { Remove-Item $PIDFILE -Force }
-    Get-ChildItem $ROOT -Filter 'test_*.py'   -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    Get-ChildItem $ROOT -Filter 'test_*.json' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    Bootstrap
-    Write-Host "Reset complete."
-  }
-
-  'delete' {
-    Write-Host "Deleting environment..."
-    if (Test-Path $PIDFILE)     { Remove-Item $PIDFILE -Force }
-    if (Test-Path $SRC)         { Remove-Item $SRC -Recurse -Force }
-    if (Test-Path "$ROOT\logs") { Remove-Item "$ROOT\logs" -Recurse -Force }
-    Get-ChildItem $ROOT -Filter 'test_*.py'   -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    Get-ChildItem $ROOT -Filter 'test_*.json' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    Write-Host "Deletion complete."
-  }
-
-  'use_core_venv' {
-    $vp = Resolve-VenvPaths $VENVDIR
-    if (-not $vp.Bin) { throw ("venv not found at {0}. Run .\install_on_windows.ps1 setup first." -f $VENVDIR) }
-    # Prepend this session's PATH so python/pip resolve to core\.venv
-    $env:Path = "$($vp.Bin);$env:Path"
-    & "$($vp.Py)" -c 'import sys; print(sys.executable)'
-    Write-Host "This PowerShell session now uses core\.venv's python/pip."
-    Write-Host "To revert, start a new PowerShell session."
+  'use_venv' {
+    Activate-Venv -VenvDir $VENVDIR
   }
 
   default { Usage }
