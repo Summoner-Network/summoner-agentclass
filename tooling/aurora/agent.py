@@ -1,14 +1,12 @@
 import inspect
 import asyncio
 
-# Setup path
-import sys, os
-target_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-if target_path not in sys.path:
-    sys.path.insert(0, target_path)
-
 from summoner.client import SummonerClient
 from summoner.protocol.process import Receiver
+
+from tooling.your_package import hello_summoner
+
+hello_summoner()
 
 from .utils.async_keyed_mutex import AsyncKeyedMutex
 
