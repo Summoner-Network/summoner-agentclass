@@ -4,9 +4,8 @@ import asyncio
 from summoner.client import SummonerClient
 from summoner.protocol.process import Receiver
 
-from tooling.your_package import hello_summoner
-
-hello_summoner()
+# from tooling.your_package import hello_summoner
+# hello_summoner()
 
 from .utils.async_keyed_mutex import AsyncKeyedMutex
 
