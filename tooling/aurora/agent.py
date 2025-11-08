@@ -12,7 +12,7 @@ from typing import Callable, Union, Hashable, Any, Optional
 class SummonerAgent(SummonerClient):
     
     release_name = "aurora"
-    release_version = "beta.1.1.0"
+    release_version = "beta.1.1.1"
 
     def __init__(self, name: Optional[str] = None):
         super().__init__(name)         
@@ -114,7 +114,16 @@ class SummonerAgent(SummonerClient):
 
         if isinstance(key_by, str):
             def _key(payload): 
-                return payload[key_by] if isinstance(payload, dict) else getattr(payload, key_by)
+                # Fail-safe: return None if key/attr missing or unhashable
+                try:
+                    v = payload[key_by] if isinstance(payload, dict) else getattr(payload, key_by)
+                except (KeyError, AttributeError, TypeError):
+                    return None
+                try:
+                    hash(v)
+                except Exception:
+                    return None
+                return v
         else:
             _key = key_by
 
@@ -122,7 +131,15 @@ class SummonerAgent(SummonerClient):
             def _seq(_): return None
         elif isinstance(seq_by, str):
             def _seq(payload): 
-                return payload[seq_by] if isinstance(payload, dict) else getattr(payload, seq_by)
+                # Fail-safe: absent or bad type -> None (disables replay check)
+                try:
+                    v = payload[seq_by] if isinstance(payload, dict) else getattr(payload, seq_by)
+                except (KeyError, AttributeError, TypeError):
+                    return None
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    return None
         else:
             _seq = seq_by
 
@@ -152,15 +169,35 @@ class SummonerAgent(SummonerClient):
                 seq_fn = _seq
 
                 async def wrapped(payload):
-                    k = key_fn(payload)
-                    async with self._key_mutex.lock((route, k)):
-                        s = seq_fn(payload)
-                        if s is not None:
-                            last = self._seq_seen.get((route, k))
-                            if last is not None and s <= last:   # drop stale/replay
-                                return None
-                            self._seq_seen[(route, k)] = s
-                        return await raw_fn(payload)
+                    # Defensive extraction with logging instead of exceptions.
+                    logger = getattr(self, "logger", None)
+                    try:
+                        k = key_fn(payload)
+                    except Exception as e:
+                        if logger: logger.warning("key_fn raised for route %s: %s", route, e)
+                        return None
+                    if k is None:
+                        if logger: logger.debug("Dropped message on %s: missing/invalid key", route)
+                        return None
+                    try:
+                        lock_key = (route, k)  # may raise if k unhashable; guarded above
+                        async with self._key_mutex.lock(lock_key):
+                            try:
+                                s = seq_fn(payload)
+                            except Exception as e:
+                                if logger: logger.warning("seq_fn raised for route %s key %r: %s", route, k, e)
+                                s = None
+                            if s is not None:
+                                last = self._seq_seen.get(lock_key)
+                                if last is not None and s <= last:   # drop stale/replay
+                                    if logger: logger.debug("Dropped replay on %s key %r: seq %s <= last %s", route, k, s, last)
+                                    return None
+                                self._seq_seen[lock_key] = s
+                            return await raw_fn(payload)
+                    except Exception as e:
+                        # Final safety net to avoid crashing the dispatcher.
+                        if logger: logger.error("Error handling message on %s key %r: %s", route, k, e)
+                        return None
 
                 receiver = Receiver(fn=wrapped, priority=tuple_priority)
 

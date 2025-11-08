@@ -3,6 +3,7 @@ core/
 logs/
 todo.py
 validation_draft.json
+*.old
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
