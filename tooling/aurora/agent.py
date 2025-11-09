@@ -116,8 +116,11 @@ class SummonerAgent(SummonerClient):
             def _key(payload): 
                 # Fail-safe: return None if key/attr missing or unhashable
                 try:
-                    v = payload[key_by] if isinstance(payload, dict) else getattr(payload, key_by)
-                except (KeyError, AttributeError, TypeError):
+                    v = (payload.get(key_by) if isinstance(payload, dict)
+                         else getattr(payload, key_by, None))
+                except Exception:
+                    return None
+                if v is None:
                     return None
                 try:
                     hash(v)
@@ -125,7 +128,17 @@ class SummonerAgent(SummonerClient):
                     return None
                 return v
         else:
-            _key = key_by
+            # Wrap callables so user lambdas can't raise into the dispatcher
+            def _key(payload):
+                try:
+                    v = key_by(payload)
+                except Exception:
+                    return None
+                try:
+                    hash(v)
+                except Exception:
+                    return None
+                return v
 
         if seq_by is None:
             def _seq(_): return None
@@ -133,15 +146,22 @@ class SummonerAgent(SummonerClient):
             def _seq(payload): 
                 # Fail-safe: absent or bad type -> None (disables replay check)
                 try:
-                    v = payload[seq_by] if isinstance(payload, dict) else getattr(payload, seq_by)
-                except (KeyError, AttributeError, TypeError):
+                    v = (payload.get(seq_by) if isinstance(payload, dict)
+                         else getattr(payload, seq_by, None))
+                except Exception:
+                    return None
+                if v is None:
                     return None
                 try:
                     return int(v)
                 except (TypeError, ValueError):
                     return None
         else:
-            _seq = seq_by
+            def _seq(payload):
+                try:
+                    return int(seq_by(payload))
+                except Exception:
+                    return None
 
         def decorator(fn):
             if not inspect.iscoroutinefunction(fn):
